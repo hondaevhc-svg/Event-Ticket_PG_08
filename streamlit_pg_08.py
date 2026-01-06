@@ -280,4 +280,172 @@ with tabs[2]:
     st.subheader("Visitor Entry Management")
     v_in, v_out = st.columns([1, 1.2])
 
-    with 
+    with v_in:
+        v_action = st.radio("Action", ["Entry", "Reverse Entry"], horizontal=True)
+
+        # ---------- Entry ----------
+        if v_action == "Entry":
+            v_type = st.radio(
+                "Entry Type",
+                ["Public", "Guest"],
+                horizontal=True,
+                key="v_type_radio",
+            )
+            v_cat = st.selectbox(
+                "Entry Category",
+                menu[menu["Type"] == v_type]["Category"],
+                key="v_cat_sel",
+            )
+
+            elig = tickets[
+                (tickets["Type"] == v_type)
+                & (tickets["Category"] == v_cat)
+                & (tickets["Sold"])
+                & (~tickets["Visited"])
+            ]["TicketID"].tolist()
+
+            if elig:
+                with st.form("checkin"):
+                    tid = st.selectbox("Select Ticket ID", elig)
+                    max_v = int(
+                        tickets[tickets["TicketID"] == tid]["Admit"].values[0]
+                    )
+                    v_count = st.number_input(
+                        "Confirmed Visitors",
+                        min_value=1,
+                        max_value=max_v,
+                        value=max_v,
+                    )
+                    confirm = st.form_submit_button("Confirm Entry")
+
+                    if confirm:
+                        idx = tickets.index[tickets["TicketID"] == tid][0]
+                        tickets.at[idx, "Visited"] = True
+                        tickets.at[idx, "Visitor_Seats"] = v_count
+                        tickets.at[idx, "Timestamp"] = str(pd.Timestamp.now())
+                        save_tickets_df(tickets)
+                        st.success(f"Entry confirmed for Ticket {tid}.")
+                        st.rerun()
+            else:
+                st.info("No eligible tickets for entry.")
+
+        # ---------- Reverse Entry ----------
+        else:
+            rv_type = st.radio(
+                "Entry Type",
+                ["Public", "Guest"],
+                horizontal=True,
+                key="rv_type_radio",
+            )
+            rv_cat = st.selectbox(
+                "Entry Category",
+                menu[menu["Type"] == rv_type]["Category"],
+                key="rv_cat_sel",
+            )
+
+            visited_tickets = tickets[
+                (tickets["Type"] == rv_type)
+                & (tickets["Category"] == rv_cat)
+                & (tickets["Visited"])
+            ]["TicketID"].tolist()
+
+            if visited_tickets:
+                with st.form("reverse_entry"):
+                    tid = st.selectbox("Ticket ID to reverse entry", visited_tickets)
+                    confirm = st.form_submit_button("Reverse Entry")
+
+                    if confirm:
+                        idx = tickets.index[tickets["TicketID"] == tid][0]
+                        tickets.at[idx, "Visited"] = False
+                        tickets.at[idx, "Visitor_Seats"] = 0
+                        tickets.at[idx, "Timestamp"] = None
+                        save_tickets_df(tickets)
+                        st.success(f"Entry reversed for Ticket {tid}.")
+                        st.rerun()
+            else:
+                st.info("No visitor entries to reverse.")
+
+    with v_out:
+        st.write("**Recent Visitors**")
+        recent_visitors = tickets[tickets["Visited"]].sort_values(
+            "Timestamp", ascending=False
+        ).copy()
+
+        if not recent_visitors.empty:
+            recent_visitors.insert(0, "Sno", range(1, len(recent_visitors) + 1))
+            st.dataframe(
+                recent_visitors[
+                    ["Sno", "TicketID", "Category", "Customer", "Visitor_Seats", "Timestamp"]
+                ],
+                hide_index=True,
+                use_container_width=True,
+            )
+        else:
+            st.info("No visitors recorded yet.")
+
+# -------------------------------------------------
+# 4. EDIT MENU
+# -------------------------------------------------
+with tabs[3]:
+    st.subheader("Menu & Series Configuration")
+    menu_display = custom_sort(menu.copy())
+
+    edited_menu = st.data_editor(
+        menu_display,
+        hide_index=True,
+        use_container_width=True,
+        key="menu_editor",
+    )
+
+    for index, row in edited_menu.iterrows():
+        try:
+            if "-" in str(row["Series"]):
+                start, end = map(int, str(row["Series"]).split("-"))
+                count = (end - start) + 1
+                edited_menu.at[index, "Alloc"] = count
+                edited_menu.at[index, "Total_Capacity"] = count * int(row["Admit"])
+        except Exception:
+            pass
+
+    menu_pass_input = st.text_input(
+        "Enter Menu Update Password",
+        type="password",
+        key="menu_pass",
+    )
+
+    if st.button("Update Database Menu"):
+        if menu_pass_input == "admin123":
+            new_tickets_list = []
+            for _, m_row in edited_menu.iterrows():
+                try:
+                    start, end = map(int, str(m_row["Series"]).split("-"))
+                    for tid in range(start, end + 1):
+                        tid_str = str(tid).zfill(4)
+                        existing = tickets[tickets["TicketID"] == tid_str]
+                        if not existing.empty:
+                            new_tickets_list.append(existing.iloc[0].to_dict())
+                        else:
+                            new_tickets_list.append(
+                                {
+                                    "TicketID": tid_str,
+                                    "Category": m_row["Category"],
+                                    "Type": m_row["Type"],
+                                    "Admit": m_row["Admit"],
+                                    "Seq": m_row["Seq"],
+                                    "Sold": False,
+                                    "Visited": False,
+                                    "Customer": "",
+                                    "Visitor_Seats": 0,
+                                    "Timestamp": None,
+                                }
+                            )
+                except Exception:
+                    continue
+
+            final_tickets_df = pd.DataFrame(new_tickets_list)
+            save_both(final_tickets_df, edited_menu)
+            clear_menu_pass()
+            st.success("Menu and Inventory synchronized.")
+            st.rerun()
+        else:
+            st.error("Incorrect Menu Password")
